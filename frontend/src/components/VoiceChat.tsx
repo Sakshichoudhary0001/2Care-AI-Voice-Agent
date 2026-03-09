@@ -117,16 +117,6 @@ export function VoiceChat({ sessionId: _sessionId }: VoiceChatProps) {
     setMessages((prev) => [...prev, message]);
   }, [language]);
 
-  // Initialize speech recognition
-  useEffect(() => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (SpeechRecognition) {
-      recognitionRef.current = new SpeechRecognition();
-      recognitionRef.current.continuous = false;
-      recognitionRef.current.interimResults = false;
-    }
-  }, []);
-
   useEffect(() => {
     const welcomeMessages: Record<Language, string> = {
       en: "Hello! I'm your 2Care.ai assistant. How can I help you with your appointment today?",
@@ -184,34 +174,70 @@ export function VoiceChat({ sessionId: _sessionId }: VoiceChatProps) {
     if (isRecording) {
       recognitionRef.current?.stop();
       setIsRecording(false);
+      setTextInput('');
       return;
     }
 
-    const recognition = recognitionRef.current;
-    if (!recognition) return;
+    // Create fresh recognition instance each time
+    const recognition = new SpeechRecognition();
+    recognitionRef.current = recognition;
+    recognition.continuous = false;
+    recognition.interimResults = true;
 
     // Set language for recognition
     const langMap: Record<Language, string> = { en: 'en-US', hi: 'hi-IN', ta: 'ta-IN' };
     recognition.lang = langMap[language];
 
-    recognition.onstart = () => setIsRecording(true);
-    recognition.onend = () => setIsRecording(false);
-    recognition.onerror = (event) => {
-      setIsRecording(false);
-      if (event.error === 'no-speech') {
-        addMessage('system', 'No speech detected. Please try again.');
-      } else if (event.error === 'not-allowed') {
-        addMessage('system', 'Microphone access denied. Please allow microphone permission.');
-      }
+    let finalText = '';
+
+    recognition.onstart = () => {
+      setIsRecording(true);
+      setTextInput('Listening...');
     };
-    recognition.onresult = (event) => {
-      const transcript = event.results[0][0].transcript;
-      if (transcript.trim()) {
-        processUserInput(transcript.trim());
+
+    recognition.onend = () => {
+      setIsRecording(false);
+      // If we have final text, process it
+      if (finalText.trim()) {
+        setTextInput('');
+        processUserInput(finalText.trim());
+      } else {
+        setTextInput('');
       }
     };
 
-    recognition.start();
+    recognition.onerror = (event) => {
+      setIsRecording(false);
+      setTextInput('');
+      if (event.error === 'no-speech') {
+        addMessage('system', 'No speech detected. Speak louder or check your microphone.');
+      } else if (event.error === 'not-allowed') {
+        addMessage('system', 'Microphone blocked! Click the lock icon in the address bar and allow microphone access.');
+      } else if (event.error !== 'aborted') {
+        addMessage('system', `Voice error: ${event.error}`);
+      }
+    };
+
+    recognition.onresult = (event) => {
+      let interim = '';
+      for (let i = 0; i < event.results.length; i++) {
+        const result = event.results[i];
+        if (result.isFinal) {
+          finalText += result[0].transcript + ' ';
+        } else {
+          interim += result[0].transcript;
+        }
+      }
+      // Show what user is saying in real-time
+      setTextInput(finalText + interim || 'Listening...');
+    };
+
+    try {
+      recognition.start();
+    } catch (e) {
+      addMessage('system', 'Could not start voice recognition. Try refreshing the page.');
+      setIsRecording(false);
+    }
   }, [isRecording, language, addMessage, processUserInput]);
 
   return (
